@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+gtts
+speechrecognition
+google-generativeai
+gunicorn
