@@ -6,3 +6,4 @@ speechrecognition
 pydub
 python-dotenv
 gunicorn
+python-multipart
