@@ -1,6 +1,7 @@
 fastapi
 uvicorn
+google-generativeai
 gtts
 speechrecognition
-google-generativeai
-gunicorn
+pydub
+python-dotenv
