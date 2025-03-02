@@ -13,7 +13,7 @@ app = FastAPI()
 print("Initializing application...")
 
 try:
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    GEMINI_API_KEY = "AIzaSyDR_ldG5d7n2kf-AYN0IL0HnEpIdUrkpEE"
     if not GEMINI_API_KEY:
         print("❌ ERROR: GEMINI_API_KEY is not set in environment variables")
         raise RuntimeError("Missing API key")
