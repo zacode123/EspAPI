@@ -65,6 +65,10 @@ def generate_answer(question: str, temperature: float = 1.0, max_tokens: int = 8
         print(f"❌ Error generating answer: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/", response_class=PlainTextResponse)
+async def root():
+    return "Welcome to Speech to Text, Text to Speech and interactive Gemini models web API website!"
+
 @app.post("/say")
 async def text_to_speech(text: str = Form(...)):
     print(f"\n📢 /say request received. Text length: {len(text)} characters")
