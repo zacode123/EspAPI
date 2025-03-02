@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponsefrom, PlainTextResponse
 from gtts import gTTS
 import speech_recognition as sr
 from google import genai
