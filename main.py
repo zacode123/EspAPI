@@ -73,16 +73,27 @@ async def root():
 async def text_to_speech(text: str = Form(...)):
     print(f"\n📢 /say request received. Text length: {len(text)} characters")
     try:
+        # Convert text to speech (MP3 format)
         tts = gTTS(text=text, lang='en')
-        audio_io = io.BytesIO()
-        tts.write_to_fp(audio_io)
-        audio_io.seek(0)
-        print(f"🎶 Converted text to audio ({len(audio_io.getvalue())} bytes)")
+        mp3_io = io.BytesIO()
+        tts.write_to_fp(mp3_io)
+        mp3_io.seek(0)
+
+        # Convert MP3 to WAV with the required format
+        audio = AudioSegment.from_file(mp3_io, format="mp3")
+        wav_io = io.BytesIO()
+        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)  # 16-bit PCM, Mono
+        audio.export(wav_io, format="wav")
+        wav_io.seek(0)
+
+        print(f"🎶 Converted text to WAV ({len(wav_io.getvalue())} bytes)")
+
         return StreamingResponse(
-            audio_io,
-            media_type="audio/mpeg",
-            headers={"Content-Disposition": "attachment; filename=speech.mp3"}
+            wav_io,
+            media_type="audio/wav",
+            headers={"Content-Disposition": "attachment; filename=speech.wav"}
         )
+
     except Exception as e:
         print(f"❌ /say error: {str(e)[:200]}")
         raise HTTPException(status_code=500, detail=str(e))
