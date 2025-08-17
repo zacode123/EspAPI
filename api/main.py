@@ -1,82 +1,133 @@
-from flask import Flask, request, send_file, jsonify, Response
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi.responses import StreamingResponse, PlainTextResponse
 from gtts import gTTS
-import io
-import subprocess
 import speech_recognition as sr
 from google import genai
 from google.genai import types
-import os
+import io, os, asyncio, logging
+from pydub import AudioSegment
+from concurrent.futures import ThreadPoolExecutor
+from dotenv import load_dotenv
+from mangum import Mangum
 
-app = Flask(__name__)
+# Load environment variables
+load_dotenv()
+
+# Setup app and logging
+app = FastAPI()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load Gemini AI key
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    logger.error("❌ GEMINI_API_KEY missing!")
+    raise RuntimeError("Missing GEMINI_API_KEY in environment")
+
 client = genai.Client(api_key=GEMINI_API_KEY)
+logger.info("✅ Gemini AI initialized")
 
-def mp3_to_pcm_u8(mp3_bytes: bytes) -> bytes:
-    ffmpeg_cmd = [
-        "ffmpeg",
-        "-i", "pipe:0",
-        "-af", "loudnorm,volume=30",
-        "-f", "u8",
-        "-ar", "24000",
-        "-ac", "1",
-        "pipe:1"
-    ]
-    process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    pcm_data, _ = process.communicate(input=mp3_bytes)
-    return pcm_data
+# ThreadPool for CPU-heavy tasks
+executor = ThreadPoolExecutor(max_workers=5)
 
-def text_to_pcm(text: str) -> bytes:
-    tts = gTTS(text=text, lang='en')
-    mp3_io = io.BytesIO()
-    tts.write_to_fp(mp3_io)
-    mp3_io.seek(0)
-    return mp3_to_pcm_u8(mp3_io.read())
+# ------------------------
+# Reusable Functions
+# ------------------------
 
-def audio_to_text(audio_file) -> str:
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(audio_file) as source:
-        audio_content = recognizer.record(source)
-        text = recognizer.recognize_google(audio_content)
-    return text
+async def text_to_wav(text: str):
+    """Convert text to WAV audio bytes."""
+    def synthesize_speech():
+        tts = gTTS(text=text, lang='en')
+        mp3_io = io.BytesIO()
+        tts.write_to_fp(mp3_io)
+        mp3_io.seek(0)
+        audio = AudioSegment.from_file(mp3_io, format="mp3")
+        wav_io = io.BytesIO()
+        audio.set_frame_rate(16000).set_channels(1).set_sample_width(2).export(wav_io, format="wav")
+        wav_io.seek(0)
+        return wav_io
+    wav_io = await asyncio.get_running_loop().run_in_executor(executor, synthesize_speech)
+    return wav_io
 
-def generate_answer(question: str) -> str:
-    model = "gemini-2.0-flash"
-    contents = [types.Content(role="user", parts=[types.Part.from_text(text=question)])]
-    generate_content_config = types.GenerateContentConfig(
-        temperature=1.0, top_p=0.95, top_k=64, max_output_tokens=8192, response_mime_type="text/plain"
-    )
-    response = ""
-    for chunk in client.models.generate_content_stream(model=model, contents=contents, config=generate_content_config):
-        if chunk.text:
-            response += chunk.text
-    return response
+async def audio_to_text(audio_file: UploadFile):
+    """Convert uploaded audio file to text."""
+    try:
+        audio_data = await audio_file.read()
+        audio_io = io.BytesIO(audio_data)
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(audio_io) as source:
+            audio_content = recognizer.record(source)
+            text = recognizer.recognize_google(audio_content)
+        return text, None
+    except sr.UnknownValueError:
+        return "", "Could not understand audio"
+    except sr.RequestError:
+        raise HTTPException(status_code=500, detail="Speech recognition service unavailable")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Error processing audio")
 
-@app.route("/")
-def home():
+async def generate_answer(question: str, temperature: float = 1.0, max_tokens: int = 8192):
+    """Generate AI response using Gemini API."""
+    try:
+        model = "gemini-2.0-pro-exp-02-05"
+        contents = [types.Content(role="user", parts=[types.Part.from_text(text=question)])]
+        generate_content_config = types.GenerateContentConfig(
+            temperature=temperature, top_p=0.95, top_k=64, max_output_tokens=max_tokens, response_mime_type="text/plain"
+        )
+        response = ""
+        for chunk in client.models.generate_content_stream(model=model, contents=contents, config=generate_content_config):
+            if chunk.text:
+                response += chunk.text
+        return response
+    except Exception as e:
+        logger.error(f"❌ Error generating answer: {e}")
+        raise HTTPException(status_code=500, detail="Error generating response")
+
+# ------------------------
+# Endpoints
+# ------------------------
+
+@app.get("/", response_class=PlainTextResponse)
+async def root():
     return "Welcome to Speech-to-Text, Text-to-Speech, and AI-powered assistant!"
 
-@app.route("/say", methods=["POST"])
-def say():
-    text = request.form.get("text")
-    pcm_bytes = text_to_pcm(text)
-    return Response(pcm_bytes, mimetype="audio/L8", headers={"Content-Disposition": "attachment; filename=speech.pcm"})
+@app.post("/say")
+async def say_endpoint(text: str = Form(...)):
+    """Text-to-speech endpoint."""
+    wav_io = await text_to_wav(text)
+    return StreamingResponse(wav_io, media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=speech.wav"})
 
-@app.route("/hear", methods=["POST"])
-def hear():
-    audio_file = request.files["audio"]
-    text = audio_to_text(audio_file)
-    return jsonify({"text": text})
+@app.post("/hear")
+async def hear_endpoint(audio: UploadFile = File(...)):
+    """Speech-to-text endpoint."""
+    text, error = await audio_to_text(audio)
+    if error:
+        return {"text": "", "error": error}
+    return {"text": text}
 
-@app.route("/answer", methods=["POST"])
-def answer():
-    question = request.form.get("question")
-    answer_text = generate_answer(question)
-    return jsonify({"answer": answer_text})
+@app.post("/answer")
+async def answer_endpoint(question: str = Form(...), temperature: float = Form(1.0), max_tokens: int = Form(8192)):
+    """AI answer endpoint."""
+    answer = await generate_answer(question, temperature, max_tokens)
+    return {"answer": answer}
 
-@app.route("/assist", methods=["POST"])
-def assist():
-    audio_file = request.files["audio"]
-    question_text = audio_to_text(audio_file)
-    answer_text = generate_answer(question_text)
-    pcm_bytes = text_to_pcm(answer_text)
-    return Response(pcm_bytes, mimetype="audio/L8", headers={"Content-Disposition": "attachment; filename=answer.pcm"})
+@app.post("/assist")
+async def assist_endpoint(audio: UploadFile = File(...)):
+    """End-to-end assistant: speech -> AI answer -> speech."""
+    # Step 1: Convert speech to text
+    question_text, error = await audio_to_text(audio)
+    if error:
+        return {"text": "", "error": error}
+
+    # Step 2: Get AI answer
+    answer_text = await generate_answer(question_text, temperature=1.0, max_tokens=8192)
+
+    # Step 3: Convert answer to speech
+    wav_io = await text_to_wav(answer_text)
+
+    return StreamingResponse(wav_io, media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=answer.wav"})
+
+# ------------------------
+# Vercel Serverless Handler
+# ------------------------
+handler = Mangum(app)
