@@ -8,7 +8,6 @@ import io, os, asyncio, logging
 from pydub import AudioSegment
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
-from mangum import Mangum
 
 # Load environment variables
 load_dotenv()
@@ -126,8 +125,3 @@ async def assist_endpoint(audio: UploadFile = File(...)):
     wav_io = await text_to_wav(answer_text)
 
     return StreamingResponse(wav_io, media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=answer.wav"})
-
-# ------------------------
-# Vercel Serverless Handler
-# ------------------------
-handler = Mangum(app)
