@@ -1,9 +1,6 @@
-fastapi
-uvicorn
-google-genai
-gtts
-speechrecognition
+Flask
+gTTS
 pydub
+speechrecognition
+google-genai
 python-dotenv
-gunicorn
-python-multipart
