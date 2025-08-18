@@ -9,15 +9,11 @@ from pydub import AudioSegment
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
-
-# Setup app and logging
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load Gemini AI key
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     logger.error("❌ GEMINI_API_KEY missing!")
@@ -26,15 +22,9 @@ if not GEMINI_API_KEY:
 client = genai.Client(api_key=GEMINI_API_KEY)
 logger.info("✅ Gemini AI initialized")
 
-# ThreadPool for CPU-heavy tasks
 executor = ThreadPoolExecutor(max_workers=5)
 
-# ------------------------
-# Reusable Functions
-# ------------------------
-
 async def text_to_wav(text: str):
-    """Convert text to WAV audio bytes."""
     def synthesize_speech():
         tts = gTTS(text=text, lang='en')
         mp3_io = io.BytesIO()
@@ -49,7 +39,6 @@ async def text_to_wav(text: str):
     return wav_io
 
 async def audio_to_text(audio_file: UploadFile):
-    """Convert uploaded audio file to text."""
     try:
         audio_data = await audio_file.read()
         audio_io = io.BytesIO(audio_data)
@@ -66,9 +55,8 @@ async def audio_to_text(audio_file: UploadFile):
         raise HTTPException(status_code=500, detail="Error processing audio")
 
 async def generate_answer(question: str, temperature: float = 1.0, max_tokens: int = 8192):
-    """Generate AI response using Gemini API."""
     try:
-        model = "gemini-2.0-pro-exp-02-05"
+        model = "gemini-2.0-flash"
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=question)])]
         generate_content_config = types.GenerateContentConfig(
             temperature=temperature, top_p=0.95, top_k=64, max_output_tokens=max_tokens, response_mime_type="text/plain"
@@ -82,10 +70,6 @@ async def generate_answer(question: str, temperature: float = 1.0, max_tokens: i
         logger.error(f"❌ Error generating answer: {e}")
         raise HTTPException(status_code=500, detail="Error generating response")
 
-# ------------------------
-# Endpoints
-# ------------------------
-
 @app.get("/", response_class=PlainTextResponse)
 async def root():
     return "Welcome to Speech-to-Text, Text-to-Speech, and AI-powered assistant!"
@@ -98,7 +82,6 @@ async def say_endpoint(text: str = Form(...)):
 
 @app.post("/hear")
 async def hear_endpoint(audio: UploadFile = File(...)):
-    """Speech-to-text endpoint."""
     text, error = await audio_to_text(audio)
     if error:
         return {"text": "", "error": error}
@@ -106,22 +89,14 @@ async def hear_endpoint(audio: UploadFile = File(...)):
 
 @app.post("/answer")
 async def answer_endpoint(question: str = Form(...), temperature: float = Form(1.0), max_tokens: int = Form(8192)):
-    """AI answer endpoint."""
     answer = await generate_answer(question, temperature, max_tokens)
     return {"answer": answer}
 
 @app.post("/assist")
 async def assist_endpoint(audio: UploadFile = File(...)):
-    """End-to-end assistant: speech -> AI answer -> speech."""
-    # Step 1: Convert speech to text
     question_text, error = await audio_to_text(audio)
     if error:
         return {"text": "", "error": error}
-
-    # Step 2: Get AI answer
     answer_text = await generate_answer(question_text, temperature=1.0, max_tokens=8192)
-
-    # Step 3: Convert answer to speech
     wav_io = await text_to_wav(answer_text)
-
     return StreamingResponse(wav_io, media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=answer.wav"})
