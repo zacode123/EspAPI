@@ -76,7 +76,6 @@ async def root():
 
 @app.post("/say")
 async def say_endpoint(text: str = Form(...)):
-    """Text-to-speech endpoint."""
     wav_io = await text_to_wav(text)
     return StreamingResponse(wav_io, media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=speech.wav"})
 
@@ -84,19 +83,19 @@ async def say_endpoint(text: str = Form(...)):
 async def hear_endpoint(audio: UploadFile = File(...)):
     text, error = await audio_to_text(audio)
     if error:
-        return {"text": "", "error": error}
-    return {"text": text}
+        return {"error": error}
+    return text
 
 @app.post("/answer")
 async def answer_endpoint(question: str = Form(...), temperature: float = Form(1.0), max_tokens: int = Form(8192)):
     answer = await generate_answer(question, temperature, max_tokens)
-    return {"answer": answer}
+    return answer
 
 @app.post("/assist")
 async def assist_endpoint(audio: UploadFile = File(...)):
     question_text, error = await audio_to_text(audio)
     if error:
-        return {"text": "", "error": error}
+        return {"error": error}
     answer_text = await generate_answer(question_text, temperature=1.0, max_tokens=8192)
     wav_io = await text_to_wav(answer_text)
     return StreamingResponse(wav_io, media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=answer.wav"})
