@@ -1,7 +1,7 @@
 fastapi
-uvicorn
 gtts
 pydub
 SpeechRecognition
 google-genai
 python-dotenv
+python-multipart
