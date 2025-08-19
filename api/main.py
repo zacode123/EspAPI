@@ -5,7 +5,9 @@ import speech_recognition as sr
 from google import genai
 from google.genai import types
 import io, os, asyncio, logging
-from pydub import AudioSegment
+from pymp3 import Decoder
+import numpy as np
+import resampy
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
@@ -24,19 +26,20 @@ logger.info("✅ Gemini AI initialized")
 
 executor = ThreadPoolExecutor(max_workers=5)
 
-async def text_to_wav(text: str):
+async def text_to_pcm(text: str):
     def synthesize_speech():
-        tts = gTTS(text=text, lang='en')
         mp3_io = io.BytesIO()
-        tts.write_to_fp(mp3_io)
+        gTTS(text=text, lang="en").write_to_fp(mp3_io)
         mp3_io.seek(0)
-        audio = AudioSegment.from_file(mp3_io, format="mp3")
-        wav_io = io.BytesIO()
-        audio.set_frame_rate(16000).set_channels(1).set_sample_width(2).export(wav_io, format="wav")
-        wav_io.seek(0)
-        return wav_io
-    wav_io = await asyncio.get_running_loop().run_in_executor(executor, synthesize_speech)
-    return wav_io
+        decoder = Decoder(mp3_io.read())
+        pcm = decoder.decode()
+        samples = pcm.samples
+        if samples.ndim > 1:
+            samples = samples.mean(axis=1)
+        resampled = resampy.resample(samples, pcm.sample_rate, 16000)
+        pcm16 = np.int16(resampled * 32767).tobytes()
+        return pcm16
+    return await asyncio.get_running_loop().run_in_executor(executor, synthesize_speech)
 
 async def audio_to_text(audio_file: UploadFile):
     try:
@@ -51,33 +54,32 @@ async def audio_to_text(audio_file: UploadFile):
         return "", "Could not understand audio"
     except sr.RequestError:
         raise HTTPException(status_code=500, detail="Speech recognition service unavailable")
-    except Exception:
+    except Exception as e:
+        logger.error(f"❌ Audio processing error: {e}")
         raise HTTPException(status_code=500, detail="Error processing audio")
 
-async def generate_answer(question: str, temperature: float = 1.0, max_tokens: int = 8192):
+async def generate_answer(question: str, temperature: float = 1.0, max_tokens: int = 2048):
     try:
         model = "gemini-2.0-flash"
         contents = [types.Content(role="user", parts=[types.Part.from_text(text=question)])]
-        generate_content_config = types.GenerateContentConfig(
-            temperature=temperature, top_p=0.95, top_k=64, max_output_tokens=max_tokens, response_mime_type="text/plain"
+        config = types.GenerateContentConfig(
+            temperature=temperature, top_p=0.95, top_k=40,
+            max_output_tokens=max_tokens, response_mime_type="text/plain"
         )
-        response = ""
-        for chunk in client.models.generate_content_stream(model=model, contents=contents, config=generate_content_config):
-            if chunk.text:
-                response += chunk.text
-        return response
+        response = client.models.generate_content(model=model, contents=contents, config=config)
+        return response.text if hasattr(response, "text") else ""
     except Exception as e:
         logger.error(f"❌ Error generating answer: {e}")
         raise HTTPException(status_code=500, detail="Error generating response")
 
 @app.get("/", response_class=PlainTextResponse)
 async def root():
-    return "Welcome to Speech-to-Text, Text-to-Speech, and AI-powered assistant!"
+    return "Speech ↔ Text ↔ AI Assistant Ready ✅"
 
 @app.post("/say")
 async def say_endpoint(text: str = Form(...)):
-    wav_io = await text_to_wav(text)
-    return StreamingResponse(wav_io, media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=speech.wav"})
+    pcm_bytes = await text_to_pcm(text)
+    return StreamingResponse(io.BytesIO(pcm_bytes), media_type="application/octet-stream")
 
 @app.post("/hear")
 async def hear_endpoint(audio: UploadFile = File(...)):
@@ -87,15 +89,14 @@ async def hear_endpoint(audio: UploadFile = File(...)):
     return text
 
 @app.post("/answer")
-async def answer_endpoint(question: str = Form(...), temperature: float = Form(1.0), max_tokens: int = Form(8192)):
-    answer = await generate_answer(question, temperature, max_tokens)
-    return answer
+async def answer_endpoint(question: str = Form(...), temperature: float = Form(1.0), max_tokens: int = Form(2048)):
+    return await generate_answer(question, temperature, max_tokens)
 
 @app.post("/assist")
 async def assist_endpoint(audio: UploadFile = File(...)):
     question_text, error = await audio_to_text(audio)
     if error:
         return {"error": error}
-    answer_text = await generate_answer(question_text, temperature=1.0, max_tokens=8192)
-    wav_io = await text_to_wav(answer_text)
-    return StreamingResponse(wav_io, media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=answer.wav"})
+    answer_text = await generate_answer(question_text, temperature=1.0, max_tokens=2048)
+    pcm_bytes = await text_to_pcm(answer_text)
+    return StreamingResponse(io.BytesIO(pcm_bytes), media_type="application/octet-stream")
