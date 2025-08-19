@@ -1,6 +1,7 @@
 fastapi
 uvicorn
-google-cloud-texttospeech
-speechrecognition
+gTTS
+SpeechRecognition
 google-genai
 python-dotenv
+miniaudio
