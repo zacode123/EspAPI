@@ -1,5 +1,4 @@
 fastapi
-uvicorn
 gTTS
 SpeechRecognition
 google-genai
