@@ -1,7 +1,10 @@
 fastapi
-gtts
-pydub
+uvicorn
+gTTS
 SpeechRecognition
 google-genai
 python-dotenv
-python-multipart
+pymp3
+soundfile
+resampy
+numpy
