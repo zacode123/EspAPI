@@ -1,58 +1,69 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse
-from google.cloud import texttospeech
+from gtts import gTTS
 import speech_recognition as sr
 from google import genai
 from google.genai import types
-import io, os, asyncio, logging
+import io, os, asyncio, logging, audioop, miniaudio
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
+from functools import lru_cache
 
-# Load environment
 load_dotenv()
 app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Google Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    logger.error("❌ GEMINI_API_KEY missing!")
-    raise RuntimeError("Missing GEMINI_API_KEY in environment")
-client = genai.Client(api_key=GEMINI_API_KEY)
+# 🔑 Gemini API
+@lru_cache(maxsize=1)
+def get_gemini_client():
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        logger.error("❌ GEMINI_API_KEY missing!")
+        raise RuntimeError("Missing GEMINI_API_KEY in environment")
+    return genai.Client(api_key=api_key)
+
+client = get_gemini_client()
 logger.info("✅ Gemini AI initialized")
 
-# Google Cloud TTS
-tts_client = texttospeech.TextToSpeechClient()
 executor = ThreadPoolExecutor(max_workers=5)
 
-
-# ---------- TTS (returns raw PCM16) ----------
+# ------------------------------
+# TEXT → PCM16 (❌ no cache here)
+# ------------------------------
 async def text_to_pcm(text: str) -> bytes:
-    def synthesize():
-        synthesis_input = texttospeech.SynthesisInput(text=text)
-        voice = texttospeech.VoiceSelectionParams(language_code="en-US")
-        audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.LINEAR16,
-            sample_rate_hertz=16000
-        )
-        response = tts_client.synthesize_speech(
-            input=synthesis_input, voice=voice, audio_config=audio_config
-        )
-        return response.audio_content  # raw PCM16
-    return await asyncio.get_running_loop().run_in_executor(executor, synthesize)
+    def synthesize_speech():
+        mp3_io = io.BytesIO()
+        gTTS(text=text, lang="en").write_to_fp(mp3_io)
+        mp3_io.seek(0)
 
+        dec = miniaudio.decode(mp3_io.read(), filetype="mp3")
+        pcm = dec.samples
+        sr = dec.sample_rate
+        ch = dec.nchannels
 
-# ---------- STT ----------
+        if ch > 1:
+            pcm = audioop.tomono(pcm, 2, 0.5, 0.5)
+        if sr != 16000:
+            pcm = audioop.ratecv(pcm, 2, 1, sr, 16000, None)[0]
+
+        return pcm
+    return await asyncio.get_running_loop().run_in_executor(None, synthesize_speech)
+
+# ------------------------------
+# AUDIO → TEXT
+# ------------------------------
+@lru_cache(maxsize=128)
+def cached_google_recognize(audio_bytes: bytes) -> str:
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+        audio_content = recognizer.record(source)
+        return recognizer.recognize_google(audio_content)
+
 async def audio_to_text(audio_file: UploadFile):
     try:
         audio_data = await audio_file.read()
-        audio_io = io.BytesIO(audio_data)
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(audio_io) as source:
-            audio_content = recognizer.record(source)
-            text = recognizer.recognize_google(audio_content)
-        return text, None
+        return cached_google_recognize(audio_data), None
     except sr.UnknownValueError:
         return "", "Could not understand audio"
     except sr.RequestError:
@@ -60,27 +71,32 @@ async def audio_to_text(audio_file: UploadFile):
     except Exception:
         raise HTTPException(status_code=500, detail="Error processing audio")
 
+# ------------------------------
+# GEMINI AI TEXT GENERATION
+# ------------------------------
+@lru_cache(maxsize=256)
+def cached_generate_answer(question: str, temperature: float, max_tokens: int) -> str:
+    model = "gemini-2.0-flash"
+    contents = [types.Content(role="user", parts=[types.Part.from_text(text=question)])]
+    generate_content_config = types.GenerateContentConfig(
+        temperature=temperature, top_p=0.95, top_k=64,
+        max_output_tokens=max_tokens, response_mime_type="text/plain"
+    )
+    response = client.models.generate_content(
+        model=model, contents=contents, config=generate_content_config
+    )
+    return response.text
 
-# ---------- AI Answer ----------
-async def generate_answer(question: str, temperature: float = 1.0, max_tokens: int = 8192):
+async def generate_answer(question: str, temperature: float = 1.0, max_tokens: int = 2048):
     try:
-        model = "gemini-2.0-flash"
-        contents = [types.Content(role="user", parts=[types.Part.from_text(text=question)])]
-        config = types.GenerateContentConfig(
-            temperature=temperature, top_p=0.95, top_k=64, max_output_tokens=max_tokens,
-            response_mime_type="text/plain"
-        )
-        response = ""
-        for chunk in client.models.generate_content_stream(model=model, contents=contents, config=config):
-            if chunk.text:
-                response += chunk.text
-        return response
+        return cached_generate_answer(question, temperature, max_tokens)
     except Exception as e:
         logger.error(f"❌ Error generating answer: {e}")
         raise HTTPException(status_code=500, detail="Error generating response")
 
-
-# ---------- Endpoints ----------
+# ------------------------------
+# ROUTES
+# ------------------------------
 @app.get("/", response_class=PlainTextResponse)
 async def root():
     return "Welcome to PCM Speech-to-Text, Text-to-Speech, and AI assistant!"
@@ -88,19 +104,21 @@ async def root():
 @app.post("/say")
 async def say_endpoint(text: str = Form(...)):
     pcm_bytes = await text_to_pcm(text)
-    return StreamingResponse(io.BytesIO(pcm_bytes),
-                             media_type="audio/raw",  # raw PCM16 stream
-                             headers={"Content-Disposition": "attachment; filename=speech.pcm"})
+    return StreamingResponse(io.BytesIO(pcm_bytes), media_type="application/octet-stream")
 
-@app.post("/hear")
+@app.post("/hear", response_class=PlainTextResponse)
 async def hear_endpoint(audio: UploadFile = File(...)):
     text, error = await audio_to_text(audio)
     if error:
-        return {"error": error}
+        raise HTTPException(status_code=400, detail=error)
     return text
 
-@app.post("/answer")
-async def answer_endpoint(question: str = Form(...), temperature: float = Form(1.0), max_tokens: int = Form(8192)):
+@app.post("/answer", response_class=PlainTextResponse)
+async def answer_endpoint(
+    question: str = Form(...),
+    temperature: float = Form(1.0),
+    max_tokens: int = Form(2048),
+):
     answer = await generate_answer(question, temperature, max_tokens)
     return answer
 
@@ -109,8 +127,6 @@ async def assist_endpoint(audio: UploadFile = File(...)):
     question_text, error = await audio_to_text(audio)
     if error:
         return {"error": error}
-    answer_text = await generate_answer(question_text, temperature=1.0, max_tokens=8192)
+    answer_text = await generate_answer(question_text, temperature=1.0, max_tokens=2048)
     pcm_bytes = await text_to_pcm(answer_text)
-    return StreamingResponse(io.BytesIO(pcm_bytes),
-                             media_type="audio/raw",
-                             headers={"Content-Disposition": "attachment; filename=answer.pcm"})
+    return StreamingResponse(io.BytesIO(pcm_bytes), media_type="application/octet-stream")
