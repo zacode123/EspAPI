@@ -43,7 +43,7 @@ async def text_to_wav(text: str) -> bytes:
         width = dec.sample_width
         if ch > 1:
             pcm = audioop.tomono(pcm, width, 0.5, 0.5)
-     if sr != 16000 or ch != 1:
+        if sr != 16000 or ch != 1:
             pcm = audioop.ratecv(pcm, width, ch, sr, 16000, None)[0]
             sr = 16000
             ch = 1
@@ -136,6 +136,6 @@ async def assist_endpoint(audio: UploadFile = File(...)):
     if error:
         return {"error": error}
     answer_text = await generate_answer(question_text, temperature=1.0, max_tokens=2048)
-    wav_bytes = await text_to_wav(answer)
+    wav_bytes = await text_to_wav(answer_text)
     return StreamingResponse(io.BytesIO(wav_bytes), media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=speech.wav"})
   
