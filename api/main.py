@@ -4,7 +4,7 @@ from gtts import gTTS
 import speech_recognition as sr
 from google import genai
 from google.genai import types
-import io, os, asyncio, logging, audioop, miniaudio
+import io, os, asyncio, logging, audioop, miniaudio, wave
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from functools import lru_cache
@@ -29,26 +29,34 @@ logger.info("✅ Gemini AI initialized")
 executor = ThreadPoolExecutor(max_workers=5)
 
 # ------------------------------
-# TEXT → PCM16 (❌ no cache here)
+# TEXT → WAV
 # ------------------------------
-async def text_to_pcm(text: str) -> bytes:
+async def text_to_wav(text: str) -> bytes:
     def synthesize_speech():
         mp3_io = io.BytesIO()
         gTTS(text=text, lang="en").write_to_fp(mp3_io)
         mp3_io.seek(0)
-
         dec = miniaudio.decode(mp3_io.read(), filetype="mp3")
         pcm = dec.samples
         sr = dec.sample_rate
         ch = dec.nchannels
-
+        width = dec.sample_width
         if ch > 1:
-            pcm = audioop.tomono(pcm, 2, 0.5, 0.5)
-        if sr != 16000:
-            pcm = audioop.ratecv(pcm, 2, 1, sr, 16000, None)[0]
-
-        return pcm
-    return await asyncio.get_running_loop().run_in_executor(None, synthesize_speech)
+            pcm = audioop.tomono(pcm, width, 0.5, 0.5)
+     if sr != 16000 or ch != 1:
+            pcm = audioop.ratecv(pcm, width, ch, sr, 16000, None)[0]
+            sr = 16000
+            ch = 1
+        wav_io = io.BytesIO()
+        with wave.open(wav_io, "wb") as wf:
+            wf.setnchannels(ch)
+            wf.setsampwidth(width)
+            wf.setframerate(sr)
+            wf.writeframes(pcm)
+        wav_io.seek(0)
+        return wav_io.read()
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, synthesize_speech)
 
 # ------------------------------
 # AUDIO → TEXT
@@ -103,9 +111,9 @@ async def root():
 
 @app.post("/say")
 async def say_endpoint(text: str = Form(...)):
-    pcm_bytes = await text_to_pcm(text)
-    return StreamingResponse(io.BytesIO(pcm_bytes), media_type="application/octet-stream")
-
+    wav_bytes = await text_to_wav(text)
+    return StreamingResponse(io.BytesIO(wav_bytes), media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=speech.wav"})
+    
 @app.post("/hear", response_class=PlainTextResponse)
 async def hear_endpoint(audio: UploadFile = File(...)):
     text, error = await audio_to_text(audio)
@@ -128,5 +136,6 @@ async def assist_endpoint(audio: UploadFile = File(...)):
     if error:
         return {"error": error}
     answer_text = await generate_answer(question_text, temperature=1.0, max_tokens=2048)
-    pcm_bytes = await text_to_pcm(answer_text)
-    return StreamingResponse(io.BytesIO(pcm_bytes), media_type="application/octet-stream")
+    wav_bytes = await text_to_wav(answer)
+    return StreamingResponse(io.BytesIO(wav_bytes), media_type="audio/wav", headers={"Content-Disposition": "attachment; filename=speech.wav"})
+  
