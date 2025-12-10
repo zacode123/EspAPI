@@ -1,7 +1,5 @@
 fastapi
-gTTS
 SpeechRecognition
 google-genai
 python-dotenv
 python-multipart
-miniaudio
