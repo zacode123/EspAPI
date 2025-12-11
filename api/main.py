@@ -115,7 +115,7 @@ async def answer_endpoint(
 
 @app.get("/ai_say")
 async def ai_say_endpoint(question: str):
-    answer = await generate_answer(question, "gemma-3-27b", 1.0, 2048)
+    answer = await generate_answer(question, "gemini-2.5-flash-lite", 1.0, 2048)
     pcm16_bytes = await text_to_pcm16(answer)
     return StreamingResponse(io.BytesIO(pcm16_bytes), media_type="audio/L16")
 
