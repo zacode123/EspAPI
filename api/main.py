@@ -110,7 +110,7 @@ async def hear_endpoint(audio: UploadFile = File(...)):
 @app.post("/answer", response_class=PlainTextResponse)
 async def answer_endpoint(
     question: str = Form(...),
-    aimodel: str = Form("gemma-3-27b"),
+    aimodel: str = Form("gemini-2.5-flash-lite"),
     temperature: float = Form(1.0),
     max_tokens: int = Form(2048)
 ):
@@ -121,7 +121,7 @@ async def answer_endpoint(
 async def ai_say_endpoint(question: str):
     answer = await generate_answer(question, "gemini-2.5-flash-lite", 1.0, 2048)
     pcm16_bytes = await text_to_pcm16(answer)
-    return StreamingResponse(io.BytesIO(pcm16_bytes), media_type="audio/L16")
+    return StreamingResponse(io.BytesIO(pcm16_bytes))
 
 
 @app.post("/assist")
