@@ -29,8 +29,8 @@ logger.info("✅ Gemini AI initialized")
 # ------------------------------
 async def text_to_pcm16(text: str) -> bytes:
     response = client.models.generate_content(
-        model="gemini-2.0-audio",
-        contents=text,
+        model="gemini-2.5-flash-native-audio-dialog",
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text=text)])],
         config=types.GenerateContentConfig(
             audio=types.AudioConfig(
                 voice="Verse",     # or 'Piper', 'Charisma', 'Studio'
@@ -106,7 +106,7 @@ async def hear_endpoint(audio: UploadFile = File(...)):
 @app.post("/answer", response_class=PlainTextResponse)
 async def answer_endpoint(
     question: str = Form(...),
-    aimodel: str = Form("gemini-2.0-flash"),
+    aimodel: str = Form("gemma-3-27b"),
     temperature: float = Form(1.0),
     max_tokens: int = Form(2048)
 ):
@@ -115,14 +115,14 @@ async def answer_endpoint(
 
 @app.get("/ai_say")
 async def ai_say_endpoint(question: str):
-    answer = await generate_answer(question, "gemini-2.0-flash", 1.0, 2048)
+    answer = await generate_answer(question, "gemma-3-27b", 1.0, 2048)
     pcm16_bytes = await text_to_pcm16(answer)
     return StreamingResponse(io.BytesIO(pcm16_bytes), media_type="audio/L16")
 
 
 @app.post("/assist")
 async def assist_endpoint(audio: UploadFile = File(...),
-    aimodel: str = Form("gemini-2.0-flash"),
+    aimodel: str = Form("gemma-3-27b"),
     temperature: float = Form(1.0),
     max_tokens: int = Form(2048)
     ):
