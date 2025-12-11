@@ -30,7 +30,7 @@ logger.info("✅ Gemini AI initialized")
 async def text_to_pcm16(text: str):
     response = client.models.generate_content(
         model="gemini-2.5-flash-preview-tts",
-        contents=text
+        contents=text,
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
