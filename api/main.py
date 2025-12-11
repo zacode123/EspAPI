@@ -39,7 +39,6 @@ async def text_to_pcm16(text: str) -> bytes:
                         voice_name="Verse"   # or 'Piper', 'Charisma', 'Studio'
                     )
                 ),
-                audio_format="pcm16"
             )
         )
     )
