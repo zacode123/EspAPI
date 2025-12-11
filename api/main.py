@@ -27,7 +27,7 @@ logger.info("✅ Gemini AI initialized")
 # ------------------------------
 # TEXT → PCM16
 # ------------------------------
-async def text_to_pcm16(text: str)
+async def text_to_pcm16(text: str):
     response = client.models.generate_content(
         model="gemini-2.5-flash-preview-tts",
         contents=text
