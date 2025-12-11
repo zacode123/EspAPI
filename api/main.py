@@ -36,13 +36,13 @@ async def text_to_pcm16(text: str):
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name="Verse"   # or 'Piper', 'Charisma', 'Studio'
+                        voice_name="Kore"
                     )
                 )
             )
         )
     )
-    return response.audio.data
+    return response.candidates[0].content.parts[0].inline_data.data
     
 # ------------------------------
 # AUDIO → TEXT
