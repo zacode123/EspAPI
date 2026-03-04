@@ -135,7 +135,7 @@ async def answer_endpoint(
 @app.get("/ai_say")
 async def ai_say_endpoint(question: str):
     answer = await generate_answer(question, "gemma-3-27b-it", 1.0, 2000)
-    lang = "hin" if "hindi" in answer.lower() else "en"
+    lang = "hi" if "hindi" in answer.lower() else "en"
     mp3_bytes = await text_to_mp3(answer, lang)
     return StreamingResponse(io.BytesIO(mp3_bytes), media_type="audio/mpeg")
     
