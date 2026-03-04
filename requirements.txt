@@ -1,4 +1,6 @@
 fastapi
+uvicorn[standard]
+aiohttp
 SpeechRecognition
 google-genai
 python-dotenv
