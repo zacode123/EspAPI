@@ -33,8 +33,6 @@ async def text_to_mp3(text: str, lang: str = "en") -> bytes:
     MAX_CHARS = 200
     chunks = []
     t = text.strip()
-
-    # Split text into chunks
     while t:
         chunk = t[:MAX_CHARS]
         if len(chunk) == MAX_CHARS and " " in chunk:
@@ -43,10 +41,8 @@ async def text_to_mp3(text: str, lang: str = "en") -> bytes:
         else:
             t = t[MAX_CHARS:]
         chunks.append(chunk.strip())
-
     url = "https://translate.google.com/translate_tts"
     headers = {"User-Agent": "Mozilla/5.0"}
-
     async def fetch_chunk(session, chunk_text):
         params = {
             "ie": "UTF-8",
@@ -59,10 +55,8 @@ async def text_to_mp3(text: str, lang: str = "en") -> bytes:
                 return await resp.read()
             else:
                 raise RuntimeError(f"TTS request failed for chunk: {resp.status}")
-
     async with aiohttp.ClientSession() as session:
         audio_parts = await asyncio.gather(*(fetch_chunk(session, c) for c in chunks))
-
     return b"".join(audio_parts)
 
 # ------------------------------
@@ -117,8 +111,8 @@ async def root():
     return "Welcome to MP3_Speech-to-Text, Text-to-MP3_Speech, and AI API server for ESP8266/ESP32."
 
 @app.post("/say")
-async def say_endpoint(text: str = Form(...)):
-    mp3_bytes = await text_to_mp3(text)
+async def say_endpoint(text: str = Form(...), lang: str = Form("en")):
+    mp3_bytes = await text_to_mp3(text, lang)
     return StreamingResponse(io.BytesIO(mp3_bytes), media_type="audio/mpeg")
 
 @app.post("/hear", response_class=PlainTextResponse)
@@ -140,8 +134,8 @@ async def answer_endpoint(
 
 @app.get("/ai_say")
 async def ai_say_endpoint(question: str):
-    answer = await generate_answer(question, "gemini-2.5-flash-lite", 1.0, 2048)
-    mp3_bytes = await text_to_mp3(answer)
+    answer = await generate_answer(question, "gemma-3-27b", 1.0, 2000)
+    mp3_bytes = await text_to_mp3(answer, answer.toLowerCase().contains('hindi') ? "hin" : "en");
     return StreamingResponse(io.BytesIO(mp3_bytes), media_type="audio/mpeg")
 
 @app.post("/assist")
