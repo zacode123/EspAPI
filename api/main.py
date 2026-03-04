@@ -125,7 +125,7 @@ async def hear_endpoint(audio: UploadFile = File(...)):
 @app.post("/answer", response_class=PlainTextResponse)
 async def answer_endpoint(
     question: str = Form(...),
-    aimodel: str = Form("gemini-2.5-flash-lite"),
+    aimodel: str = Form("gemma-3-27b-it"),
     temperature: float = Form(1.0),
     max_tokens: int = Form(2048)
 ):
@@ -134,7 +134,7 @@ async def answer_endpoint(
 
 @app.get("/ai_say")
 async def ai_say_endpoint(question: str):
-    answer = await generate_answer(question, "gemma-3-27b", 1.0, 2000)
+    answer = await generate_answer(question, "gemma-3-27b-it", 1.0, 2000)
     lang = "hin" if "hindi" in answer.lower() else "en"
     mp3_bytes = await text_to_mp3(answer, lang)
     return StreamingResponse(io.BytesIO(mp3_bytes), media_type="audio/mpeg")
