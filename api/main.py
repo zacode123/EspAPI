@@ -4,7 +4,7 @@ import aiohttp
 import speech_recognition as sr
 from google import genai
 from google.genai import types
-import io, os, logging
+import io, os, logging, asyncio
 from dotenv import load_dotenv
 from functools import lru_cache
 from typing import List
@@ -27,23 +27,23 @@ client = get_gemini_client()
 logger.info("✅ Gemini AI initialized")
 
 # ------------------------------
-# TEXT → PCM16
+# TEXT → MP3
 # ------------------------------
-async def text_to_pcm16(text: str, lang: str = "en") -> bytes:
+async def text_to_mp3(text: str, lang: str = "en") -> bytes:
     MAX_CHARS = 200
-    def split_text(t: str) -> List[str]:
-        chunks = []
-        while t:
-            chunk = t[:MAX_CHARS]
-            if len(chunk) == MAX_CHARS and " " in chunk:
-                last_space = chunk.rfind(" ")
-                chunk, t = chunk[:last_space], t[last_space+1:]
-            else:
-                t = t[MAX_CHARS:]
-            chunks.append(chunk.strip())
-        return chunks
+    chunks = []
+    t = text.strip()
 
-    chunks = split_text(text)
+    # Split text into chunks
+    while t:
+        chunk = t[:MAX_CHARS]
+        if len(chunk) == MAX_CHARS and " " in chunk:
+            last_space = chunk.rfind(" ")
+            chunk, t = chunk[:last_space], t[last_space+1:]
+        else:
+            t = t[MAX_CHARS:]
+        chunks.append(chunk.strip())
+
     url = "https://translate.google.com/translate_tts"
     headers = {"User-Agent": "Mozilla/5.0"}
 
@@ -59,11 +59,12 @@ async def text_to_pcm16(text: str, lang: str = "en") -> bytes:
                 return await resp.read()
             else:
                 raise RuntimeError(f"TTS request failed for chunk: {resp.status}")
+
     async with aiohttp.ClientSession() as session:
         audio_parts = await asyncio.gather(*(fetch_chunk(session, c) for c in chunks))
 
     return b"".join(audio_parts)
-    
+
 # ------------------------------
 # AUDIO → TEXT
 # ------------------------------
@@ -113,13 +114,13 @@ async def generate_answer(question: str, aimodel: str, temperature: float = 1.0,
 # ------------------------------
 @app.get("/", response_class=PlainTextResponse)
 async def root():
-    return "Welcome to PCM16_Speech-to-Text, Text-to-PCM16_Speech, and AI api server for ESP8266/ESP32."
+    return "Welcome to MP3_Speech-to-Text, Text-to-MP3_Speech, and AI API server for ESP8266/ESP32."
 
 @app.post("/say")
 async def say_endpoint(text: str = Form(...)):
-    pcm16_bytes = await text_to_pcm16(text)
-    return StreamingResponse(io.BytesIO(pcm16_bytes))
-    
+    mp3_bytes = await text_to_mp3(text)
+    return StreamingResponse(io.BytesIO(mp3_bytes), media_type="audio/mpeg")
+
 @app.post("/hear", response_class=PlainTextResponse)
 async def hear_endpoint(audio: UploadFile = File(...)):
     text, error = await audio_to_text(audio)
@@ -140,19 +141,19 @@ async def answer_endpoint(
 @app.get("/ai_say")
 async def ai_say_endpoint(question: str):
     answer = await generate_answer(question, "gemini-2.5-flash-lite", 1.0, 2048)
-    pcm16_bytes = await text_to_pcm16(answer)
-    return StreamingResponse(io.BytesIO(pcm16_bytes))
-
+    mp3_bytes = await text_to_mp3(answer)
+    return StreamingResponse(io.BytesIO(mp3_bytes), media_type="audio/mpeg")
 
 @app.post("/assist")
-async def assist_endpoint(audio: UploadFile = File(...),
-    aimodel: str = Form("gemma-3-27b"),
+async def assist_endpoint(
+    audio: UploadFile = File(...),
+    aimodel: str = Form("gemini-2.5-flash-lite"),
     temperature: float = Form(1.0),
     max_tokens: int = Form(2048)
-    ):
+):
     question_text, error = await audio_to_text(audio)
     if error:
         return {"error": error}
-    answer_text = await generate_answer(question_text, "gemini-2.0-flash", 1.0, 2048)
-    pcm16_bytes = await text_to_pcm16(answer_text)
-    return StreamingResponse(io.BytesIO(pcm16_bytes))
+    answer_text = await generate_answer(question_text, aimodel, temperature, max_tokens)
+    mp3_bytes = await text_to_mp3(answer_text)
+    return StreamingResponse(io.BytesIO(mp3_bytes), media_type="audio/mpeg")
