@@ -1,11 +1,13 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse
+import aiohttp
 import speech_recognition as sr
 from google import genai
 from google.genai import types
 import io, os, logging
 from dotenv import load_dotenv
 from functools import lru_cache
+from typing import List
 
 load_dotenv()
 app = FastAPI()
@@ -27,22 +29,40 @@ logger.info("✅ Gemini AI initialized")
 # ------------------------------
 # TEXT → PCM16
 # ------------------------------
-async def text_to_pcm16(text: str):
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-preview-tts",
-        contents=text,
-        config=types.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=types.SpeechConfig(
-                voice_config=types.VoiceConfig(
-                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name="Kore"
-                    )
-                )
-            )
-        )
-    )
-    return response.candidates[0].content.parts[0].inline_data.data
+async def text_to_pcm16(text: str, lang: str = "en") -> bytes:
+    MAX_CHARS = 200
+    def split_text(t: str) -> List[str]:
+        chunks = []
+        while t:
+            chunk = t[:MAX_CHARS]
+            if len(chunk) == MAX_CHARS and " " in chunk:
+                last_space = chunk.rfind(" ")
+                chunk, t = chunk[:last_space], t[last_space+1:]
+            else:
+                t = t[MAX_CHARS:]
+            chunks.append(chunk.strip())
+        return chunks
+
+    chunks = split_text(text)
+    url = "https://translate.google.com/translate_tts"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    async def fetch_chunk(session, chunk_text):
+        params = {
+            "ie": "UTF-8",
+            "q": chunk_text,
+            "tl": lang,
+            "client": "tw-ob"
+        }
+        async with session.get(url, params=params, headers=headers) as resp:
+            if resp.status == 200:
+                return await resp.read()
+            else:
+                raise RuntimeError(f"TTS request failed for chunk: {resp.status}")
+    async with aiohttp.ClientSession() as session:
+        audio_parts = await asyncio.gather(*(fetch_chunk(session, c) for c in chunks))
+
+    return b"".join(audio_parts)
     
 # ------------------------------
 # AUDIO → TEXT
