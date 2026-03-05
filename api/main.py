@@ -96,7 +96,7 @@ def filter_characters(text: str, lang: str) -> str:
     original = text
     
     if lang == "hi":
-        text = re.sub(r"[^\u0900-\u097F0-9\s.,!?।-]", "", text)
+        text = re.sub(r"[A-Za-z]", "", text)
         
     text = re.sub(r"[*_`~#]", "", text)
     text = re.sub(r"<[^>]+>", "", text)
@@ -168,7 +168,7 @@ async def stream_tts(text: str, lang: str = "en"):
 
     logger.info("===== STREAM START =====")
 
-    sentences = split_sentences(text)
+    sentences = split_sentences(filter_characters(text, lang))
 
     connector = aiohttp.TCPConnector(limit=2)
 
@@ -177,8 +177,6 @@ async def stream_tts(text: str, lang: str = "en"):
     async with aiohttp.ClientSession(connector=connector) as session:
 
         for i, sentence in enumerate(sentences):
-
-            sentence = filter_characters(sentence, lang)
 
             if not sentence:
                 continue
