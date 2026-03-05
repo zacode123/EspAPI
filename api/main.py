@@ -119,7 +119,7 @@ async def audio_to_text(audio_file: UploadFile):
 # ------------------------------
 
 async def generate_answer(question: str,
-                          model="gemma-3-27b",
+                          model="gemma-3-27b-it",
                           temperature=1.0,
                           max_tokens=2048):
 
@@ -182,7 +182,7 @@ async def hear_endpoint(audio: UploadFile = File(...)):
 @app.post("/answer", response_class=PlainTextResponse)
 async def answer_endpoint(
         question: str = Form(...),
-        aimodel: str = Form("gemma-3-27b")):
+        aimodel: str = Form("gemma-3-27b-it")):
 
     answer = await generate_answer(question, aimodel)
     return answer
@@ -206,7 +206,7 @@ async def ai_say_endpoint(question: str):
 @app.post("/assist")
 async def assist_endpoint(
         audio: UploadFile = File(...),
-        aimodel: str = Form("gemma-3-27b")):
+        aimodel: str = Form("gemma-3-27b-it")):
 
     question_text, error = await audio_to_text(audio)
 
