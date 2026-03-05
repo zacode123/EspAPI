@@ -56,7 +56,7 @@ def split_sentences(text: str, max_chars=180):
 
     text = text.replace("\n", " ").replace("\r", " ").strip()
 
-    parts = re.findall(r'[^.!?]+[.!?]?', text)
+    parts = re.split(r'(?<=[.!?।])\s+', text)
 
     sentences = []
     current = ""
@@ -98,8 +98,10 @@ def filter_characters(text: str, lan: str) -> str:
     if lang == "hi":
         text = re.sub(r"[^\u0900-\u097F\s.,!?।]", "", text)
         
-    text = re.sub(r"[*_`~]", "", text)
+    text = re.sub(r"[*_`~#]", "", text)
     text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\([^)]*\)", "", text)
+    text = text.replace("“", "").replace("”", "")
     text = re.sub(r"\s+", " ", text)
 
     text = text.strip()
@@ -107,7 +109,7 @@ def filter_characters(text: str, lan: str) -> str:
     if original != text:
         logger.debug(f"Cleaned text: {text}")
 
-    return text.strip()
+    return text
 
 
 # ------------------------------------------------
