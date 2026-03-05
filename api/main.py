@@ -30,7 +30,7 @@ def get_gemini_client():
 client = get_gemini_client()
 
 # ------------------------------
-# SENTENCE SPLITTER (keeps punctuation)
+# SENTENCE SPLITTER
 # ------------------------------
 
 def split_sentences(text: str, max_chars=180):
@@ -59,8 +59,9 @@ def split_sentences(text: str, max_chars=180):
 
     return sentences
 
+
 # ------------------------------
-# FILTER SPECIAL CHARACTERS
+# TEXT CLEANER
 # ------------------------------
 
 def filter_characters(text: str) -> str:
@@ -73,6 +74,7 @@ def filter_characters(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
+
 
 # ------------------------------
 # GOOGLE TTS REQUEST
@@ -90,16 +92,15 @@ async def fetch_tts(session, sentence, lang):
     }
 
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Connection": "keep-alive"
+        "User-Agent": "Mozilla/5.0"
     }
 
     try:
+
         async with session.get(url, params=params, headers=headers) as resp:
 
             if resp.status == 200:
-                audio = await resp.read()
-                return audio
+                return await resp.read()
 
             logger.warning(f"TTS error {resp.status}")
             return b""
@@ -108,21 +109,20 @@ async def fetch_tts(session, sentence, lang):
         logger.error(f"TTS exception: {e}")
         return b""
 
+
 # ------------------------------
-# STREAM TTS (parallel requests)
+# STREAM TTS (ORDERED)
 # ------------------------------
 
 async def stream_tts(text: str, lang: str = "en"):
 
     sentences = split_sentences(text)
 
-    logger.info(f"Streaming {len(sentences)} sentences")
+    logger.info(f"TTS streaming {len(sentences)} sentences")
 
-    connector = aiohttp.TCPConnector(limit=6, ssl=False)
+    connector = aiohttp.TCPConnector(limit=2, ssl=False)
 
     async with aiohttp.ClientSession(connector=connector) as session:
-
-        tasks = []
 
         for sentence in sentences:
 
@@ -131,15 +131,11 @@ async def stream_tts(text: str, lang: str = "en"):
             if not sentence:
                 continue
 
-            task = asyncio.create_task(fetch_tts(session, sentence, lang))
-            tasks.append(task)
-
-        for future in asyncio.as_completed(tasks):
-
-            audio = await future
+            audio = await fetch_tts(session, sentence, lang)
 
             if audio:
                 yield audio
+
 
 # ------------------------------
 # AUDIO → TEXT
@@ -154,6 +150,7 @@ def cached_google_recognize(audio_bytes: bytes):
         audio_content = recognizer.record(source)
         return recognizer.recognize_google(audio_content)
 
+
 async def audio_to_text(audio_file: UploadFile):
 
     try:
@@ -167,6 +164,7 @@ async def audio_to_text(audio_file: UploadFile):
 
     except sr.RequestError:
         raise HTTPException(status_code=500, detail="Speech recognition unavailable")
+
 
 # ------------------------------
 # GEMINI TEXT GENERATION
@@ -212,6 +210,7 @@ async def generate_answer(question: str,
             logger.warning("Gemini busy, retrying...")
             await asyncio.sleep(3)
 
+
 # ------------------------------
 # ROUTES
 # ------------------------------
@@ -220,10 +219,12 @@ async def generate_answer(question: str,
 async def root():
     return "AI Voice Assistant API"
 
+
 @app.get("/favicon.ico")
 @app.get("/favicon.png")
 async def favicon():
     return Response(status_code=204)
+
 
 # ------------------------------
 # TEXT → SPEECH
@@ -237,10 +238,10 @@ async def say_endpoint(text: str = Form(...), lang: str = Form("en")):
         media_type="audio/mpeg",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked"
+            "Connection": "keep-alive"
         }
     )
+
 
 # ------------------------------
 # SPEECH → TEXT
@@ -256,6 +257,7 @@ async def hear_endpoint(audio: UploadFile = File(...)):
 
     return text
 
+
 # ------------------------------
 # AI TEXT RESPONSE
 # ------------------------------
@@ -268,6 +270,7 @@ async def answer_endpoint(
     answer = await generate_answer(question, aimodel)
 
     return answer
+
 
 # ------------------------------
 # AI → SPEECH
@@ -285,10 +288,10 @@ async def ai_say_endpoint(question: str):
         media_type="audio/mpeg",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked"
+            "Connection": "keep-alive"
         }
     )
+
 
 # ------------------------------
 # VOICE ASSISTANT
@@ -311,7 +314,6 @@ async def assist_endpoint(
         media_type="audio/mpeg",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked"
+            "Connection": "keep-alive"
         }
     )
