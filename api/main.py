@@ -36,15 +36,17 @@ client = get_gemini_client()
 def split_sentences(text: str, max_chars=180):
     text = text.replace("\n", " ").replace("\r", " ").strip()
 
+    parts = re.findall(r"[^.!?]+[.!?,]?", text)
+
     sentences = []
     current = ""
 
-    for part in re.split(r"[.!?]+", text):
+    for part in parts:
         part = part.strip()
         if not part:
             continue
 
-        if len(current) + len(part) < max_chars:
+        if len(current) + len(part) <= max_chars:
             current += " " + part
         else:
             sentences.append(current.strip())
@@ -63,8 +65,10 @@ def filter_characters(text: str) -> str:
     if not text:
         return ""
     text = re.sub(r"[*_`~]", "", text)
-    text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"<[^>]+>", "", text)              
+    text = text.strip(')"\'`-–—')  
+    text = re.sub(r"[/:]+", " ", text)
+    text = re.sub(r"\s+", " ", text) 
     return text.strip()
     
 # ------------------------------
