@@ -8,6 +8,7 @@ import io, os, logging, asyncio
 from dotenv import load_dotenv
 from functools import lru_cache
 from typing import List
+import re
 
 load_dotenv()
 app = FastAPI()
@@ -30,13 +31,13 @@ logger.info("✅ Gemini AI initialized")
 # TEXT → MP3
 # ------------------------------
 async def text_to_mp3(text: str, lang: str = "en") -> bytes:
-    MAX_CHARS = 300
+    MAX_CHARS = 180
 
     # Split by sentences first (better natural speech)
     sentences = []
     current = ""
 
-    for part in text.replace("!", ".").replace("?", ".").split("."):
+    for part in re.split(r'[.!?]+', text)
         part = part.strip()
         if not part:
             continue
