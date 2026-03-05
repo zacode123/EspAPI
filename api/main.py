@@ -30,23 +30,25 @@ def get_gemini_client():
 client = get_gemini_client()
 
 # ------------------------------
-# SENTENCE SPLITTER
+# SENTENCE SPLITTER (keeps punctuation)
 # ------------------------------
 
 def split_sentences(text: str, max_chars=180):
+
     text = text.replace("\n", " ").replace("\r", " ").strip()
 
-    parts = re.findall(r"[^.!?]+[.!?,]?", text)
+    parts = re.findall(r'[^.!?]+[.!?]?', text)
 
     sentences = []
     current = ""
 
     for part in parts:
+
         part = part.strip()
         if not part:
             continue
 
-        if len(current) + len(part) <= max_chars:
+        if len(current) + len(part) < max_chars:
             current += " " + part
         else:
             sentences.append(current.strip())
@@ -58,54 +60,87 @@ def split_sentences(text: str, max_chars=180):
     return sentences
 
 # ------------------------------
-# FILTER SPECIAL CHARECTERS
+# FILTER SPECIAL CHARACTERS
 # ------------------------------
 
 def filter_characters(text: str) -> str:
+
     if not text:
         return ""
+
     text = re.sub(r"[*_`~]", "", text)
-    text = re.sub(r"<[^>]+>", "", text)              
-    text = text.strip(')"\'`-–—')  
-    text = re.sub(r"[/:]+", " ", text)
-    text = re.sub(r"\s+", " ", text) 
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\s+", " ", text)
+
     return text.strip()
-    
+
 # ------------------------------
-# TTS CHUNK STREAM
+# GOOGLE TTS REQUEST
+# ------------------------------
+
+async def fetch_tts(session, sentence, lang):
+
+    url = "https://translate.google.com/translate_tts"
+
+    params = {
+        "ie": "UTF-8",
+        "q": sentence,
+        "tl": lang,
+        "client": "tw-ob"
+    }
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Connection": "keep-alive"
+    }
+
+    try:
+        async with session.get(url, params=params, headers=headers) as resp:
+
+            if resp.status == 200:
+                audio = await resp.read()
+                return audio
+
+            logger.warning(f"TTS error {resp.status}")
+            return b""
+
+    except Exception as e:
+        logger.error(f"TTS exception: {e}")
+        return b""
+
+# ------------------------------
+# STREAM TTS (parallel requests)
 # ------------------------------
 
 async def stream_tts(text: str, lang: str = "en"):
-    logger.info(f"🔹 Starting TTS stream | lang={lang}")
-    sentences = split_sentences(text)
-    logger.info(f"🔹 Total sentences to process: {len(sentences)}")
 
-    url = "https://translate.google.com/translate_tts"
-    headers = {"User-Agent": "Mozilla/5.0", "Connection": "keep-alive"}
-    connector = aiohttp.TCPConnector(limit=5, ssl=False)
+    sentences = split_sentences(text)
+
+    logger.info(f"Streaming {len(sentences)} sentences")
+
+    connector = aiohttp.TCPConnector(limit=6, ssl=False)
 
     async with aiohttp.ClientSession(connector=connector) as session:
 
-        for idx, sentence in enumerate(sentences, start=1):
+        tasks = []
+
+        for sentence in sentences:
+
             sentence = filter_characters(sentence)
+
             if not sentence:
-                logger.debug(f"⚠️ Skipping empty sentence #{idx}")
                 continue
 
-            params = {"ie": "UTF-8", "q": sentence, "tl": lang, "client": "tw-ob"}
-            logger.info(f"🔹 Sending TTS request for sentence #{idx}: {sentence[:50]}...")
+            task = asyncio.create_task(fetch_tts(session, sentence, lang))
+            tasks.append(task)
 
-            try:
-                async with session.get(url, params=params, headers=headers) as resp:
-                    if resp.status == 200:
-                        audio = await resp.read()
-                        logger.info(f"✅ Received audio for sentence #{idx} ({len(audio)} bytes)")
-                        yield audio
-                    else:
-                        logger.warning(f"❌ TTS failed ({resp.status}) for sentence #{idx}: {sentence[:50]}...")
-            except Exception as e:
-                logger.error(f"💥 Exception during TTS for sentence #{idx}: {e}")
-                
+        for future in asyncio.as_completed(tasks):
+
+            audio = await future
+
+            if audio:
+                yield audio
+
 # ------------------------------
 # AUDIO → TEXT
 # ------------------------------
@@ -122,7 +157,9 @@ def cached_google_recognize(audio_bytes: bytes):
 async def audio_to_text(audio_file: UploadFile):
 
     try:
+
         audio_data = await audio_file.read()
+
         return cached_google_recognize(audio_data), None
 
     except sr.UnknownValueError:
@@ -135,9 +172,15 @@ async def audio_to_text(audio_file: UploadFile):
 # GEMINI TEXT GENERATION
 # ------------------------------
 
-async def generate_answer(question: str, model="gemma-3-27b-it", temperature=1.0, max_tokens=2048):
-    for attempt in range(1, 4):
+async def generate_answer(question: str,
+                          model="gemma-3-27b-it",
+                          temperature=1.0,
+                          max_tokens=2048):
+
+    for attempt in range(3):
+
         try:
+
             contents = [
                 types.Content(
                     role="user",
@@ -161,13 +204,14 @@ async def generate_answer(question: str, model="gemma-3-27b-it", temperature=1.0
 
             return response.text
 
-        except ServerError as e:
-            if attempt == 3:
+        except ServerError:
+
+            if attempt == 2:
                 raise
-            logger.warning(f"⚠️ Gemini server busy, retrying in 3 seconds... "
-                           f"(Attempt {attempt}/3)")
+
+            logger.warning("Gemini busy, retrying...")
             await asyncio.sleep(3)
-            
+
 # ------------------------------
 # ROUTES
 # ------------------------------
@@ -181,13 +225,26 @@ async def root():
 async def favicon():
     return Response(status_code=204)
 
+# ------------------------------
 # TEXT → SPEECH
+# ------------------------------
 
 @app.post("/say")
 async def say_endpoint(text: str = Form(...), lang: str = Form("en")):
-    return StreamingResponse(stream_tts(text, lang), media_type="audio/mpeg")
 
+    return StreamingResponse(
+        stream_tts(text, lang),
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked"
+        }
+    )
+
+# ------------------------------
 # SPEECH → TEXT
+# ------------------------------
 
 @app.post("/hear", response_class=PlainTextResponse)
 async def hear_endpoint(audio: UploadFile = File(...)):
@@ -199,7 +256,9 @@ async def hear_endpoint(audio: UploadFile = File(...)):
 
     return text
 
+# ------------------------------
 # AI TEXT RESPONSE
+# ------------------------------
 
 @app.post("/answer", response_class=PlainTextResponse)
 async def answer_endpoint(
@@ -207,9 +266,12 @@ async def answer_endpoint(
         aimodel: str = Form("gemma-3-27b-it")):
 
     answer = await generate_answer(question, aimodel)
+
     return answer
 
-# AI → SPEECH (REALTIME)
+# ------------------------------
+# AI → SPEECH
+# ------------------------------
 
 @app.get("/ai_say")
 async def ai_say_endpoint(question: str):
@@ -220,10 +282,17 @@ async def ai_say_endpoint(question: str):
 
     return StreamingResponse(
         stream_tts(answer, lang),
-        media_type="audio/mpeg"
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked"
+        }
     )
 
+# ------------------------------
 # VOICE ASSISTANT
+# ------------------------------
 
 @app.post("/assist")
 async def assist_endpoint(
@@ -239,5 +308,10 @@ async def assist_endpoint(
 
     return StreamingResponse(
         stream_tts(answer_text),
-        media_type="audio/mpeg"
+        media_type="audio/mpeg",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked"
+        }
     )
