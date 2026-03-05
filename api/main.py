@@ -89,13 +89,15 @@ def split_sentences(text: str, max_chars=180):
 # TEXT CLEANER
 # ------------------------------------------------
 
-def filter_characters(text: str) -> str:
-
+def filter_characters(text: str, lan: str) -> str:
     if not text:
         return ""
 
     original = text
-
+    
+    if lang == "hi":
+        text = re.sub(r"[^\u0900-\u097F\s.,!?।]", "", text)
+        
     text = re.sub(r"[*_`~]", "", text)
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"\s+", " ", text)
@@ -105,7 +107,7 @@ def filter_characters(text: str) -> str:
     if original != text:
         logger.debug(f"Cleaned text: {text}")
 
-    return text
+    return text.strip()
 
 
 # ------------------------------------------------
