@@ -4,6 +4,7 @@ import aiohttp
 import speech_recognition as sr
 from google import genai
 from google.genai import types
+from google.genai.errors import ServerError
 import io, os, logging, asyncio, re
 from dotenv import load_dotenv
 from functools import lru_cache
@@ -130,34 +131,39 @@ async def audio_to_text(audio_file: UploadFile):
 # GEMINI TEXT GENERATION
 # ------------------------------
 
-async def generate_answer(question: str,
-                          model="gemma-3-12b-it",
-                          temperature=1.0,
-                          max_tokens=2048):
+async def generate_answer(question: str, model="gemma-3-12b-it", temperature=1.0, max_tokens=2048):
+    for attempt in range(1, 4):
+        try:
+            contents = [
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=question)]
+                )
+            ]
 
-    contents = [
-        types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=question)]
-        )
-    ]
+            config = types.GenerateContentConfig(
+                temperature=temperature,
+                top_p=0.95,
+                top_k=64,
+                max_output_tokens=max_tokens,
+                response_mime_type="text/plain"
+            )
 
-    config = types.GenerateContentConfig(
-        temperature=temperature,
-        top_p=0.95,
-        top_k=64,
-        max_output_tokens=max_tokens,
-        response_mime_type="text/plain"
-    )
+            response = client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=config
+            )
 
-    response = client.models.generate_content(
-        model=model,
-        contents=contents,
-        config=config
-    )
+            return response.text
 
-    return response.text
-
+        except ServerError as e:
+            if attempt == 3:
+                raise
+            logger.warning(f"⚠️ Gemini server busy, retrying in 3 seconds... "
+                           f"(Attempt {attempt}/3)")
+            await asyncio.sleep(3)
+            
 # ------------------------------
 # ROUTES
 # ------------------------------
