@@ -89,14 +89,14 @@ def split_sentences(text: str, max_chars=180):
 # TEXT CLEANER
 # ------------------------------------------------
 
-def filter_characters(text: str, lan: str) -> str:
+def filter_characters(text: str, lang: str) -> str:
     if not text:
         return ""
 
     original = text
     
     if lang == "hi":
-        text = re.sub(r"[^\u0900-\u097F\s.,!?।]", "", text)
+        text = re.sub(r"[^\u0900-\u097F0-9\s.,!?।-]", "", text)
         
     text = re.sub(r"[*_`~#]", "", text)
     text = re.sub(r"<[^>]+>", "", text)
@@ -178,7 +178,7 @@ async def stream_tts(text: str, lang: str = "en"):
 
         for i, sentence in enumerate(sentences):
 
-            sentence = filter_characters(sentence)
+            sentence = filter_characters(sentence, lang)
 
             if not sentence:
                 continue
