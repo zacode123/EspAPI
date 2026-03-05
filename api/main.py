@@ -1,39 +1,58 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.responses import StreamingResponse, PlainTextResponse, Response
+
 import aiohttp
 import speech_recognition as sr
+
 from google import genai
 from google.genai import types
 from google.genai.errors import ServerError
-import io, os, logging, asyncio, re
+
+import io
+import os
+import logging
+import asyncio
+import re
+
 from dotenv import load_dotenv
 from functools import lru_cache
+
 
 load_dotenv()
 
 app = FastAPI()
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("VOICE_API")
 
-# ------------------------------
+
+# ------------------------------------------------
 # GEMINI CLIENT
-# ------------------------------
+# ------------------------------------------------
 
 @lru_cache(maxsize=1)
 def get_gemini_client():
+
     api_key = os.getenv("GEMINI_API_KEY")
+
     if not api_key:
         raise RuntimeError("Missing GEMINI_API_KEY")
+
+    logger.info("Gemini client initialized")
+
     return genai.Client(api_key=api_key)
+
 
 client = get_gemini_client()
 
-# ------------------------------
+
+# ------------------------------------------------
 # SENTENCE SPLITTER
-# ------------------------------
+# ------------------------------------------------
 
 def split_sentences(text: str, max_chars=180):
+
+    logger.info("Splitting sentences")
 
     text = text.replace("\n", " ").replace("\r", " ").strip()
 
@@ -45,6 +64,7 @@ def split_sentences(text: str, max_chars=180):
     for part in parts:
 
         part = part.strip()
+
         if not part:
             continue
 
@@ -57,28 +77,40 @@ def split_sentences(text: str, max_chars=180):
     if current:
         sentences.append(current.strip())
 
+    logger.info(f"Total sentences: {len(sentences)}")
+
+    for i, s in enumerate(sentences):
+        logger.info(f"Sentence {i+1}: {s}")
+
     return sentences
 
 
-# ------------------------------
+# ------------------------------------------------
 # TEXT CLEANER
-# ------------------------------
+# ------------------------------------------------
 
 def filter_characters(text: str) -> str:
 
     if not text:
         return ""
 
+    original = text
+
     text = re.sub(r"[*_`~]", "", text)
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"\s+", " ", text)
 
-    return text.strip()
+    text = text.strip()
+
+    if original != text:
+        logger.debug(f"Cleaned text: {text}")
+
+    return text
 
 
-# ------------------------------
+# ------------------------------------------------
 # GOOGLE TTS REQUEST
-# ------------------------------
+# ------------------------------------------------
 
 async def fetch_tts(session, sentence, lang):
 
@@ -95,60 +127,105 @@ async def fetch_tts(session, sentence, lang):
         "User-Agent": "Mozilla/5.0"
     }
 
+    logger.info(f"TTS request: {sentence}")
+
     try:
 
         async with session.get(url, params=params, headers=headers) as resp:
 
-            if resp.status == 200:
-                return await resp.read()
+            logger.info(f"TTS HTTP status: {resp.status}")
 
-            logger.warning(f"TTS error {resp.status}")
-            return b""
+            if resp.status == 200:
+
+                audio = await resp.read()
+
+                logger.info(f"Received audio bytes: {len(audio)}")
+
+                return audio
+
+            else:
+
+                logger.warning("TTS failed")
+
+                return b""
 
     except Exception as e:
+
         logger.error(f"TTS exception: {e}")
+
         return b""
 
 
-# ------------------------------
-# STREAM TTS (ORDERED)
-# ------------------------------
+# ------------------------------------------------
+# STREAM TTS
+# ------------------------------------------------
 
 async def stream_tts(text: str, lang: str = "en"):
 
+    logger.info("===== STREAM START =====")
+
     sentences = split_sentences(text)
 
-    logger.info(f"TTS streaming {len(sentences)} sentences")
+    connector = aiohttp.TCPConnector(limit=2)
 
-    connector = aiohttp.TCPConnector(limit=2, ssl=False)
+    first_chunk = True
 
     async with aiohttp.ClientSession(connector=connector) as session:
 
-        for sentence in sentences:
+        for i, sentence in enumerate(sentences):
 
             sentence = filter_characters(sentence)
 
             if not sentence:
                 continue
 
+            logger.info(f"Processing sentence {i+1}")
+
             audio = await fetch_tts(session, sentence, lang)
 
-            if audio:
+            if not audio:
+                continue
+
+            if first_chunk:
+
+                logger.info("Sending FIRST chunk")
+
+                first_chunk = False
+
                 yield audio
 
+            else:
 
-# ------------------------------
+                # Remove MP3 header to keep browser happy
+                logger.info("Sending FOLLOWUP chunk")
+
+                yield audio[500:]
+
+            await asyncio.sleep(0.01)
+
+    logger.info("===== STREAM END =====")
+
+
+# ------------------------------------------------
 # AUDIO → TEXT
-# ------------------------------
+# ------------------------------------------------
 
 @lru_cache(maxsize=128)
 def cached_google_recognize(audio_bytes: bytes):
 
+    logger.info("Speech recognition start")
+
     recognizer = sr.Recognizer()
 
     with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+
         audio_content = recognizer.record(source)
-        return recognizer.recognize_google(audio_content)
+
+        text = recognizer.recognize_google(audio_content)
+
+        logger.info(f"Recognized: {text}")
+
+        return text
 
 
 async def audio_to_text(audio_file: UploadFile):
@@ -157,23 +234,29 @@ async def audio_to_text(audio_file: UploadFile):
 
         audio_data = await audio_file.read()
 
+        logger.info(f"Audio bytes received: {len(audio_data)}")
+
         return cached_google_recognize(audio_data), None
 
     except sr.UnknownValueError:
+
         return "", "Could not understand audio"
 
     except sr.RequestError:
+
         raise HTTPException(status_code=500, detail="Speech recognition unavailable")
 
 
-# ------------------------------
+# ------------------------------------------------
 # GEMINI TEXT GENERATION
-# ------------------------------
+# ------------------------------------------------
 
 async def generate_answer(question: str,
                           model="gemma-3-27b-it",
                           temperature=1.0,
                           max_tokens=2048):
+
+    logger.info(f"Generating answer for: {question}")
 
     for attempt in range(3):
 
@@ -200,20 +283,22 @@ async def generate_answer(question: str,
                 config=config
             )
 
+            logger.info("Gemini response generated")
+
             return response.text
 
         except ServerError:
 
-            if attempt == 2:
-                raise
+            logger.warning("Gemini busy retrying...")
 
-            logger.warning("Gemini busy, retrying...")
             await asyncio.sleep(3)
 
+    raise HTTPException(status_code=500, detail="AI generation failed")
 
-# ------------------------------
+
+# ------------------------------------------------
 # ROUTES
-# ------------------------------
+# ------------------------------------------------
 
 @app.get("/", response_class=PlainTextResponse)
 async def root():
@@ -226,29 +311,34 @@ async def favicon():
     return Response(status_code=204)
 
 
-# ------------------------------
+# ------------------------------------------------
 # TEXT → SPEECH
-# ------------------------------
+# ------------------------------------------------
 
 @app.post("/say")
 async def say_endpoint(text: str = Form(...), lang: str = Form("en")):
+
+    logger.info("Endpoint /say called")
 
     return StreamingResponse(
         stream_tts(text, lang),
         media_type="audio/mpeg",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive"
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked"
         }
     )
 
 
-# ------------------------------
+# ------------------------------------------------
 # SPEECH → TEXT
-# ------------------------------
+# ------------------------------------------------
 
 @app.post("/hear", response_class=PlainTextResponse)
 async def hear_endpoint(audio: UploadFile = File(...)):
+
+    logger.info("/hear called")
 
     text, error = await audio_to_text(audio)
 
@@ -258,26 +348,29 @@ async def hear_endpoint(audio: UploadFile = File(...)):
     return text
 
 
-# ------------------------------
+# ------------------------------------------------
 # AI TEXT RESPONSE
-# ------------------------------
+# ------------------------------------------------
 
 @app.post("/answer", response_class=PlainTextResponse)
-async def answer_endpoint(
-        question: str = Form(...),
-        aimodel: str = Form("gemma-3-27b-it")):
+async def answer_endpoint(question: str = Form(...),
+                          aimodel: str = Form("gemma-3-27b-it")):
+
+    logger.info("/answer called")
 
     answer = await generate_answer(question, aimodel)
 
     return answer
 
 
-# ------------------------------
+# ------------------------------------------------
 # AI → SPEECH
-# ------------------------------
+# ------------------------------------------------
 
 @app.get("/ai_say")
 async def ai_say_endpoint(question: str):
+
+    logger.info("/ai_say called")
 
     answer = await generate_answer(question)
 
@@ -288,19 +381,21 @@ async def ai_say_endpoint(question: str):
         media_type="audio/mpeg",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive"
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked"
         }
     )
 
 
-# ------------------------------
+# ------------------------------------------------
 # VOICE ASSISTANT
-# ------------------------------
+# ------------------------------------------------
 
 @app.post("/assist")
-async def assist_endpoint(
-        audio: UploadFile = File(...),
-        aimodel: str = Form("gemma-3-12b-it")):
+async def assist_endpoint(audio: UploadFile = File(...),
+                          aimodel: str = Form("gemma-3-12b-it")):
+
+    logger.info("/assist called")
 
     question_text, error = await audio_to_text(audio)
 
@@ -314,6 +409,7 @@ async def assist_endpoint(
         media_type="audio/mpeg",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive"
+            "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked"
         }
     )
