@@ -30,35 +30,71 @@ logger.info("✅ Gemini AI initialized")
 # TEXT → MP3
 # ------------------------------
 async def text_to_mp3(text: str, lang: str = "en") -> bytes:
-    MAX_CHARS = 200
-    chunks = []
-    t = text.strip()
-    while t:
-        chunk = t[:MAX_CHARS]
-        if len(chunk) == MAX_CHARS and " " in chunk:
-            last_space = chunk.rfind(" ")
-            chunk, t = chunk[:last_space], t[last_space+1:]
-        else:
-            t = t[MAX_CHARS:]
-        chunks.append(chunk.strip())
-    url = "https://translate.google.com/translate_tts"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    async def fetch_chunk(session, chunk_text):
-        params = {
-            "ie": "UTF-8",
-            "q": chunk_text,
-            "tl": lang,
-            "client": "tw-ob"
-        }
-        async with session.get(url, params=params, headers=headers) as resp:
-            if resp.status == 200:
-                return await resp.read()
-            else:
-                raise RuntimeError(f"TTS request failed for chunk: {resp.status}")
-    async with aiohttp.ClientSession() as session:
-        audio_parts = await asyncio.gather(*(fetch_chunk(session, c) for c in chunks))
-    return b"".join(audio_parts)
+    MAX_CHARS = 300
 
+    # Split by sentences first (better natural speech)
+    sentences = []
+    current = ""
+
+    for part in text.replace("!", ".").replace("?", ".").split("."):
+        part = part.strip()
+        if not part:
+            continue
+
+        if len(current) + len(part) < MAX_CHARS:
+            current += " " + part
+        else:
+            sentences.append(current.strip())
+            current = part
+
+    if current:
+        sentences.append(current.strip())
+
+    # If still too large, split further
+    chunks = []
+    for sentence in sentences:
+        while len(sentence) > MAX_CHARS:
+            split = sentence[:MAX_CHARS]
+            space = split.rfind(" ")
+            if space != -1:
+                split = split[:space]
+            chunks.append(split.strip())
+            sentence = sentence[len(split):].strip()
+        chunks.append(sentence)
+
+    url = "https://translate.google.com/translate_tts"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Connection": "keep-alive"
+    }
+
+    semaphore = asyncio.Semaphore(5)
+
+    async def fetch_chunk(session, chunk_text):
+        async with semaphore:
+            params = {
+                "ie": "UTF-8",
+                "q": chunk_text,
+                "tl": lang,
+                "client": "tw-ob"
+            }
+
+            async with session.get(url, params=params, headers=headers) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+                else:
+                    raise RuntimeError(f"TTS failed: {resp.status}")
+
+    connector = aiohttp.TCPConnector(limit=10, ssl=False)
+
+    async with aiohttp.ClientSession(connector=connector) as session:
+        audio_parts = await asyncio.gather(
+            *(fetch_chunk(session, chunk) for chunk in chunks)
+        )
+
+    return b"".join(audio_parts)
+    
 # ------------------------------
 # AUDIO → TEXT
 # ------------------------------
