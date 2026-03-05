@@ -154,6 +154,11 @@ async def generate_answer(question: str,
 async def root():
     return "AI Voice Assistant API"
 
+@app.get("/favicon.ico")
+@app.get("/favicon.png")
+async def favicon():
+    return Response(status_code=204)
+
 # TEXT → SPEECH
 
 @app.post("/say")
