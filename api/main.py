@@ -131,7 +131,7 @@ async def audio_to_text(audio_file: UploadFile):
 # GEMINI TEXT GENERATION
 # ------------------------------
 
-async def generate_answer(question: str, model="gemma-3-12b-it", temperature=1.0, max_tokens=2048):
+async def generate_answer(question: str, model="gemma-3-27b-it", temperature=1.0, max_tokens=2048):
     for attempt in range(1, 4):
         try:
             contents = [
