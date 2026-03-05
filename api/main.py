@@ -83,7 +83,7 @@ async def stream_tts(text: str, lang: str = "en"):
     async with aiohttp.ClientSession(connector=connector) as session:
 
         for idx, sentence in enumerate(sentences, start=1):
-            sectence = filter_characters(sentence)
+            sentence = filter_characters(sentence)
             if not sentence:
                 logger.debug(f"⚠️ Skipping empty sentence #{idx}")
                 continue
