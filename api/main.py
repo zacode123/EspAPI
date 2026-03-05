@@ -55,6 +55,18 @@ def split_sentences(text: str, max_chars=180):
     return sentences
 
 # ------------------------------
+# FILTER SPECIAL CHARECTERS
+# ------------------------------
+
+def filter_characters(text: str) -> str:
+    if not text:
+        return ""
+    text = re.sub(r"[*_`~]", "", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+    
+# ------------------------------
 # TTS CHUNK STREAM
 # ------------------------------
 
@@ -70,7 +82,7 @@ async def stream_tts(text: str, lang: str = "en"):
     async with aiohttp.ClientSession(connector=connector) as session:
 
         for idx, sentence in enumerate(sentences, start=1):
-            sentence = sentence.strip()
+            sectence = filter_characters(sentence)
             if not sentence:
                 logger.debug(f"⚠️ Skipping empty sentence #{idx}")
                 continue
