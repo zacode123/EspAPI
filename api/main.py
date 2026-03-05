@@ -59,39 +59,36 @@ def split_sentences(text: str, max_chars=180):
 # ------------------------------
 
 async def stream_tts(text: str, lang: str = "en"):
-
+    logger.info(f"🔹 Starting TTS stream | lang={lang}")
     sentences = split_sentences(text)
+    logger.info(f"🔹 Total sentences to process: {len(sentences)}")
 
     url = "https://translate.google.com/translate_tts"
-
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Connection": "keep-alive"
-    }
-
+    headers = {"User-Agent": "Mozilla/5.0", "Connection": "keep-alive"}
     connector = aiohttp.TCPConnector(limit=5, ssl=False)
 
     async with aiohttp.ClientSession(connector=connector) as session:
 
-        for sentence in sentences:
+        for idx, sentence in enumerate(sentences, start=1):
+            sentence = sentence.strip()
+            if not sentence:
+                logger.debug(f"⚠️ Skipping empty sentence #{idx}")
+                continue
 
-            params = {
-                "ie": "UTF-8",
-                "q": sentence,
-                "tl": lang,
-                "client": "tw-ob"
-            }
+            params = {"ie": "UTF-8", "q": sentence, "tl": lang, "client": "tw-ob"}
+            logger.info(f"🔹 Sending TTS request for sentence #{idx}: {sentence[:50]}...")
 
             try:
                 async with session.get(url, params=params, headers=headers) as resp:
                     if resp.status == 200:
                         audio = await resp.read()
+                        logger.info(f"✅ Received audio for sentence #{idx} ({len(audio)} bytes)")
                         yield audio
                     else:
-                        logger.warning(f"TTS failed: {resp.status}")
+                        logger.warning(f"❌ TTS failed ({resp.status}) for sentence #{idx}: {sentence[:50]}...")
             except Exception as e:
-                logger.error(e)
-
+                logger.error(f"💥 Exception during TTS for sentence #{idx}: {e}")
+                
 # ------------------------------
 # AUDIO → TEXT
 # ------------------------------
