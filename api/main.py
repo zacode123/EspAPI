@@ -330,8 +330,8 @@ async def ai_say_endpoint(question: str):
 
     return Response(
         content=audio,
-        media_type="audio/mpeg"
-     #   headers={"Content-Length": str(len(audio))}
+        media_type="audio/mpeg",
+        headers={"Content-Length": str(len(audio))}
     )
 
 
