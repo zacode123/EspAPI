@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
-from fastapi.responses import StreamingResponse, PlainTextResponse, Response
+from fastapi.responses import PlainTextResponse, Response
 
 import aiohttp
 import speech_recognition as sr
@@ -52,8 +52,6 @@ client = get_gemini_client()
 
 def split_sentences(text: str, max_chars=180):
 
-    logger.info("Splitting sentences")
-
     text = text.replace("\n", " ").replace("\r", " ").strip()
 
     parts = re.split(r'(?<=[.!?।])\s+', text)
@@ -77,11 +75,6 @@ def split_sentences(text: str, max_chars=180):
     if current:
         sentences.append(current.strip())
 
-    logger.info(f"Total sentences: {len(sentences)}")
-
-    for i, s in enumerate(sentences):
-        logger.info(f"Sentence {i+1}: {s}")
-
     return sentences
 
 
@@ -90,26 +83,20 @@ def split_sentences(text: str, max_chars=180):
 # ------------------------------------------------
 
 def filter_characters(text: str, lang: str) -> str:
+
     if not text:
         return ""
 
-    original = text
-    
     if lang == "hi":
         text = re.sub(r"[A-Za-z]", "", text)
-        
+
     text = re.sub(r"[*_`~#]", "", text)
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"\([^)]*\)", "", text)
     text = text.replace("“", "").replace("”", "")
     text = re.sub(r"\s+", " ", text)
 
-    text = text.strip()
-
-    if original != text:
-        logger.debug(f"Cleaned text: {text}")
-
-    return text
+    return text.strip()
 
 
 # ------------------------------------------------
@@ -131,27 +118,19 @@ async def fetch_tts(session, sentence, lang):
         "User-Agent": "Mozilla/5.0"
     }
 
-    logger.info(f"TTS request: {sentence}")
-
     try:
 
         async with session.get(url, params=params, headers=headers) as resp:
-
-            logger.info(f"TTS HTTP status: {resp.status}")
 
             if resp.status == 200:
 
                 audio = await resp.read()
 
-                logger.info(f"Received audio bytes: {len(audio)}")
+                logger.info(f"TTS received {len(audio)} bytes")
 
                 return audio
 
-            else:
-
-                logger.warning("TTS failed")
-
-                return b""
+            return b""
 
     except Exception as e:
 
@@ -161,51 +140,30 @@ async def fetch_tts(session, sentence, lang):
 
 
 # ------------------------------------------------
-# STREAM TTS
+# GENERATE FULL TTS AUDIO
 # ------------------------------------------------
 
-async def stream_tts(text: str, lang: str = "en"):
-
-    logger.info("===== STREAM START =====")
+async def generate_full_tts(text: str, lang: str = "en"):
 
     sentences = split_sentences(filter_characters(text, lang))
 
-    connector = aiohttp.TCPConnector(limit=2)
+    audio_bytes = bytearray()
 
-    first_chunk = True
+    async with aiohttp.ClientSession() as session:
 
-    async with aiohttp.ClientSession(connector=connector) as session:
-
-        for i, sentence in enumerate(sentences):
+        for sentence in sentences:
 
             if not sentence:
                 continue
-
-            logger.info(f"Processing sentence {i+1}")
 
             audio = await fetch_tts(session, sentence, lang)
 
             if not audio:
                 continue
 
-            if first_chunk:
+            audio_bytes.extend(audio)
 
-                logger.info("Sending FIRST chunk")
-
-                first_chunk = False
-
-                yield audio
-
-            else:
-
-                # Remove MP3 header to keep browser happy
-                logger.info("Sending FOLLOWUP chunk")
-
-                yield audio[500:]
-
-            await asyncio.sleep(0.01)
-
-    logger.info("===== STREAM END =====")
+    return bytes(audio_bytes)
 
 
 # ------------------------------------------------
@@ -214,8 +172,6 @@ async def stream_tts(text: str, lang: str = "en"):
 
 @lru_cache(maxsize=128)
 def cached_google_recognize(audio_bytes: bytes):
-
-    logger.info("Speech recognition start")
 
     recognizer = sr.Recognizer()
 
@@ -236,8 +192,6 @@ async def audio_to_text(audio_file: UploadFile):
 
         audio_data = await audio_file.read()
 
-        logger.info(f"Audio bytes received: {len(audio_data)}")
-
         return cached_google_recognize(audio_data), None
 
     except sr.UnknownValueError:
@@ -257,8 +211,6 @@ async def generate_answer(question: str,
                           model="gemma-3-27b-it",
                           temperature=1.0,
                           max_tokens=2048):
-
-    logger.info(f"Generating answer for: {question}")
 
     for attempt in range(3):
 
@@ -284,8 +236,6 @@ async def generate_answer(question: str,
                 contents=contents,
                 config=config
             )
-
-            logger.info("Gemini response generated")
 
             return response.text
 
@@ -320,16 +270,14 @@ async def favicon():
 @app.post("/say")
 async def say_endpoint(text: str = Form(...), lang: str = Form("en")):
 
-    logger.info("Endpoint /say called")
+    logger.info("/say called")
 
-    return StreamingResponse(
-        stream_tts(text, lang),
+    audio = await generate_full_tts(text, lang)
+
+    return Response(
+        content=audio,
         media_type="audio/mpeg",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked"
-        }
+        headers={"Content-Length": str(len(audio))}
     )
 
 
@@ -378,14 +326,12 @@ async def ai_say_endpoint(question: str):
 
     lang = "hi" if "hindi" in question.lower() else "en"
 
-    return StreamingResponse(
-        stream_tts(answer, lang),
+    audio = await generate_full_tts(answer, lang)
+
+    return Response(
+        content=audio,
         media_type="audio/mpeg",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked"
-        }
+        headers={"Content-Length": str(len(audio))}
     )
 
 
@@ -406,12 +352,10 @@ async def assist_endpoint(audio: UploadFile = File(...),
 
     answer_text = await generate_answer(question_text, aimodel)
 
-    return StreamingResponse(
-        stream_tts(answer_text),
+    audio = await generate_full_tts(answer_text)
+
+    return Response(
+        content=audio,
         media_type="audio/mpeg",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Transfer-Encoding": "chunked"
-        }
+        headers={"Content-Length": str(len(audio))}
     )
