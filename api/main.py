@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Body
 from fastapi.responses import PlainTextResponse, Response
 
 import aiohttp
@@ -16,7 +16,12 @@ import re
 
 from dotenv import load_dotenv
 from functools import lru_cache
+from pydantic import BaseModel
 
+
+# ------------------------------------------------
+# ENV + APP
+# ------------------------------------------------
 
 load_dotenv()
 
@@ -24,6 +29,33 @@ app = FastAPI()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VOICE_API")
+
+
+# ------------------------------------------------
+# GLOBAL TTS SESSION (connection pooling)
+# ------------------------------------------------
+
+tts_session = None
+
+
+@app.on_event("startup")
+async def startup():
+
+    global tts_session
+
+    timeout = aiohttp.ClientTimeout(total=20)
+
+    tts_session = aiohttp.ClientSession(timeout=timeout)
+
+    logger.info("TTS session started")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+
+    await tts_session.close()
+
+    logger.info("TTS session closed")
 
 
 # ------------------------------------------------
@@ -100,7 +132,7 @@ def filter_characters(text: str, lang: str) -> str:
 
 
 # ------------------------------------------------
-# GOOGLE TTS REQUEST
+# GOOGLE TTS
 # ------------------------------------------------
 
 async def fetch_tts(session, sentence, lang):
@@ -140,7 +172,7 @@ async def fetch_tts(session, sentence, lang):
 
 
 # ------------------------------------------------
-# GENERATE FULL TTS AUDIO
+# GENERATE FULL TTS (PARALLEL)
 # ------------------------------------------------
 
 async def generate_full_tts(text: str, lang: str = "en"):
@@ -149,18 +181,17 @@ async def generate_full_tts(text: str, lang: str = "en"):
 
     audio_bytes = bytearray()
 
-    async with aiohttp.ClientSession() as session:
+    tasks = [
+        fetch_tts(tts_session, sentence, lang)
+        for sentence in sentences
+        if sentence
+    ]
 
-        for sentence in sentences:
+    results = await asyncio.gather(*tasks)
 
-            if not sentence:
-                continue
+    for audio in results:
 
-            audio = await fetch_tts(session, sentence, lang)
-
-            if not audio:
-                continue
-
+        if audio:
             audio_bytes.extend(audio)
 
     return bytes(audio_bytes)
@@ -209,8 +240,8 @@ async def audio_to_text(audio_file: UploadFile):
 
 async def generate_answer(question: str,
                           model="gemma-3-27b-it",
-                          temperature=1.0,
-                          max_tokens=2048):
+                          temperature=0.7,
+                          max_tokens=512):
 
     for attempt in range(3):
 
@@ -231,7 +262,8 @@ async def generate_answer(question: str,
                 response_mime_type="text/plain"
             )
 
-            response = client.models.generate_content(
+            response = await asyncio.to_thread(
+                client.models.generate_content,
                 model=model,
                 contents=contents,
                 config=config
@@ -243,24 +275,18 @@ async def generate_answer(question: str,
 
             logger.warning("Gemini busy retrying...")
 
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
 
     raise HTTPException(status_code=500, detail="AI generation failed")
 
 
 # ------------------------------------------------
-# ROUTES
+# ROOT
 # ------------------------------------------------
 
 @app.get("/", response_class=PlainTextResponse)
 async def root():
     return "AI Voice Assistant API"
-
-
-@app.get("/favicon.ico")
-@app.get("/favicon.png")
-async def favicon():
-    return Response(status_code=204)
 
 
 # ------------------------------------------------
@@ -314,13 +340,45 @@ async def answer_endpoint(question: str = Form(...),
 
 
 # ------------------------------------------------
-# AI → SPEECH
+# AI → SPEECH REQUEST MODEL
+# ------------------------------------------------
+
+class AISayRequest(BaseModel):
+    question: str
+
+
+# ------------------------------------------------
+# AI → SPEECH (GET)
 # ------------------------------------------------
 
 @app.get("/ai_say")
-async def ai_say_endpoint(question: str):
+async def ai_say_get(question: str):
 
-    logger.info("/ai_say called")
+    logger.info("/ai_say GET called")
+
+    answer = await generate_answer(question)
+
+    lang = "hi" if "hindi" in question.lower() else "en"
+
+    audio = await generate_full_tts(answer, lang)
+
+    return Response(
+        content=audio,
+        media_type="audio/mpeg",
+        headers={"Content-Length": str(len(audio))}
+    )
+
+
+# ------------------------------------------------
+# AI → SPEECH (POST)
+# ------------------------------------------------
+
+@app.post("/ai_say")
+async def ai_say_post(data: AISayRequest):
+
+    logger.info("/ai_say POST called")
+
+    question = data.question
 
     answer = await generate_answer(question)
 
