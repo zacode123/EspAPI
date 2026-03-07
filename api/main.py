@@ -44,7 +44,7 @@ logger = logging.getLogger("VOICE_API")
 @app.middleware("http")
 async def verify_access_key(request, call_next):
 
-    if request.url.path == "/":
+    if request.url.path in ["/", "/favicon.ico", "/favicon.png"]:
         return await call_next(request)
 
     key = request.headers.get("ACCESS_KEY")
