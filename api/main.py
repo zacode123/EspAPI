@@ -27,9 +27,38 @@ load_dotenv()
 
 app = FastAPI()
 
+ACCESS_KEY = os.getenv("ACCESS_KEY")
+
+# ------------------------------------------------
+# DEBUG LOGGER
+# ------------------------------------------------
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("VOICE_API")
 
+
+# ------------------------------------------------
+# AUTHORIZATION (ACCESS_KEY)
+# ------------------------------------------------                       
+
+@app.middleware("http")
+async def verify_access_key(request, call_next):
+
+    if request.url.path == "/":
+        return await call_next(request)
+
+    key = request.headers.get("ACCESS_KEY")
+
+    if not key or key != ACCESS_KEY:
+
+        logger.warning("Unauthorized access attempt")
+
+        return Response(
+            content="Service unavailable",
+            status_code=503
+        )
+
+    return await call_next(request)
 
 # ------------------------------------------------
 # GLOBAL TTS SESSION (connection pooling)
@@ -62,20 +91,8 @@ async def shutdown():
 # GEMINI CLIENT
 # ------------------------------------------------
 
-@lru_cache(maxsize=1)
-def get_gemini_client():
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-    api_key = os.getenv("GEMINI_API_KEY")
-
-    if not api_key:
-        raise RuntimeError("Missing GEMINI_API_KEY")
-
-    logger.info("Gemini client initialized")
-
-    return genai.Client(api_key=api_key)
-
-
-client = get_gemini_client()
 
 
 # ------------------------------------------------
@@ -124,7 +141,8 @@ def filter_characters(text: str, lang: str) -> str:
 
     text = re.sub(r"[*_`~#]", "", text)
     text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"\([^)]*\)", "", text)
+    text = re.sub(r"\([^)if not api_key:
+        raise RuntimeError("Missing GEMINI_API_KEY")]*\)", "", text)
     text = text.replace("“", "").replace("”", "")
     text = re.sub(r"\s+", " ", text)
 
@@ -179,8 +197,6 @@ async def generate_full_tts(text: str, lang: str = "en"):
 
     sentences = split_sentences(filter_characters(text, lang))
 
-    audio_bytes = bytearray()
-
     tasks = [
         fetch_tts(tts_session, sentence, lang)
         for sentence in sentences
@@ -189,13 +205,29 @@ async def generate_full_tts(text: str, lang: str = "en"):
 
     results = await asyncio.gather(*tasks)
 
+    merged = bytearray()
+    first = True
+
     for audio in results:
 
-        if audio:
-            audio_bytes.extend(audio)
+        if not audio:
+            continue
+            
+        if audio[:3] == b"ID3":
+            size = (audio[6] << 21) | (audio[7] << 14) | (audio[8] << 7) | audio[9]
+            audio = audio[10 + size:]
+            
+        if not first:
+            if audio[0] == 0xFF:
+                i = audio.find(b"\xff")
+                if i > 0:
+                    audio = audio[i:]
 
-    return bytes(audio_bytes)
+        merged.extend(audio)
 
+        first = False
+
+    return bytes(merged)
 
 # ------------------------------------------------
 # AUDIO → TEXT
@@ -286,7 +318,7 @@ async def generate_answer(question: str,
 
 @app.get("/", response_class=PlainTextResponse)
 async def root():
-    return "AI Voice Assistant API"
+    return "AI Voice Assistant API fir ESP32/ESP8266 by Zahid Arman Ahmed!"
 
 
 # ------------------------------------------------
@@ -303,7 +335,10 @@ async def say_endpoint(text: str = Form(...), lang: str = Form("en")):
     return Response(
         content=audio,
         media_type="audio/mpeg",
-        headers={"Content-Length": str(len(audio))}
+        headers={
+            "Content-Length": str(len(audio)),
+            "Connection": "close"
+        }
     )
 
 
@@ -365,7 +400,10 @@ async def ai_say_get(question: str):
     return Response(
         content=audio,
         media_type="audio/mpeg",
-        headers={"Content-Length": str(len(audio))}
+        headers={
+            "Content-Length": str(len(audio)),
+            "Connection": "close"
+        }
     )
 
 
@@ -389,7 +427,10 @@ async def ai_say_post(data: AISayRequest):
     return Response(
         content=audio,
         media_type="audio/mpeg",
-        headers={"Content-Length": str(len(audio))}
+        headers={
+            "Content-Length": str(len(audio)),
+            "Connection": "close"
+        }
     )
 
 
@@ -415,5 +456,8 @@ async def assist_endpoint(audio: UploadFile = File(...),
     return Response(
         content=audio,
         media_type="audio/mpeg",
-        headers={"Content-Length": str(len(audio))}
+        headers={
+            "Content-Length": str(len(audio)),
+            "Connection": "close"
+        }
     )
