@@ -141,8 +141,7 @@ def filter_characters(text: str, lang: str) -> str:
 
     text = re.sub(r"[*_`~#]", "", text)
     text = re.sub(r"<[^>]+>", "", text)
-    text = re.sub(r"\([^)if not api_key:
-        raise RuntimeError("Missing GEMINI_API_KEY")]*\)", "", text)
+    text = re.sub(r"\([^)]*\)", "", text)
     text = text.replace("“", "").replace("”", "")
     text = re.sub(r"\s+", " ", text)
 
